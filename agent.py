@@ -339,6 +339,8 @@ class OmniLearnAgent(Agent):
         return "I have cleared the whiteboard. It is ready for new diagrams and math problems."
 
 
+from livekit.plugins import cartesia, deepgram, google, groq, openai, silero
+
 server = AgentServer()
 
 
@@ -349,14 +351,44 @@ async def entrypoint(ctx: JobContext) -> None:
     }
     logger.info(f"OmniLearn Agent entering room: {ctx.room.name}")
 
-    session: AgentSession = AgentSession(
-        stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
-        tts=inference.TTS(
+    # Dynamically select STT provider based on configured API keys
+    if os.environ.get("DEEPGRAM_API_KEY"):
+        stt_mod = deepgram.STT(model="nova-3", language="en-US")
+    elif os.environ.get("OPENAI_API_KEY"):
+        stt_mod = openai.STT()
+    elif os.environ.get("GROQ_API_KEY"):
+        stt_mod = groq.STT()
+    else:
+        stt_mod = inference.STT("deepgram/nova-3", language="multi")
+
+    # Dynamically select LLM provider
+    if os.environ.get("OPENAI_API_KEY"):
+        llm_mod = openai.LLM(model="gpt-4o-mini")
+    elif os.environ.get("GROQ_API_KEY"):
+        llm_mod = groq.LLM(model="llama-3.3-70b-versatile")
+    elif os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"):
+        llm_mod = google.LLM(model="gemini-2.0-flash")
+    else:
+        llm_mod = inference.LLM("openai/gpt-4.1-mini")
+
+    # Dynamically select TTS provider with gentle pacing (0.85x speed)
+    if os.environ.get("CARTESIA_API_KEY"):
+        tts_mod = cartesia.TTS(voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc", speed=0.85)
+    elif os.environ.get("OPENAI_API_KEY"):
+        tts_mod = openai.TTS(voice="alloy", speed=0.85)
+    elif os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"):
+        tts_mod = google.TTS(voice_name="en-US-Journey-F", speed=0.85)
+    else:
+        tts_mod = inference.TTS(
             "cartesia/sonic-3",
             voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
             extra_kwargs={"speed": 0.85},
-        ),
+        )
+
+    session: AgentSession = AgentSession(
+        stt=stt_mod,
+        llm=llm_mod,
+        tts=tts_mod,
         turn_handling=TurnHandlingOptions(
             interruption={
                 "resume_false_interruption": True,
