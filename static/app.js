@@ -293,6 +293,14 @@ class OmniLearnApp {
       this.dom.micToggleBtn.disabled = false;
       this.dom.roomNameDisplay.textContent = this.room.name;
 
+      // Connect local mic stream to visualizer for live voice responsiveness
+      try {
+        const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        this.setupLocalMicVisualizer(localStream);
+      } catch (e) {
+        console.warn('Local mic visualizer notice:', e);
+      }
+
       this.isConnected = true;
       this.setConnectionState('connected', 'Live Session');
       this.dom.connectBtnText.textContent = 'End Call';
@@ -300,6 +308,7 @@ class OmniLearnApp {
       this.dom.connectBtn.disabled = false;
       this.dom.agentStateText.textContent = 'OmniLearn is Listening';
       this.dom.agentSubtext.textContent = 'Speak into your microphone, type, or use the Whiteboard';
+      this.setSubtitles('OmniLearn AI', 'I am ready! Speak into your microphone, type in chat, or ask me to solve your whiteboard drawing.');
 
     } catch (err) {
       console.error('Connection error:', err);
@@ -1929,10 +1938,31 @@ Would you like me to illustrate any related diagram or dive deeper into a specif
   }
 
   /* --------------------------------------------------------------------------
-     Canvas Audio Waveform Visualizer
+     Canvas Audio Waveform Visualizer & Ambient Orb Pulse
      -------------------------------------------------------------------------- */
   initCanvasVisualizer() {
-    this.canvasCtx.clearRect(0, 0, 480, 480);
+    this.renderVisualizer();
+  }
+
+  setupLocalMicVisualizer(stream) {
+    if (!this.audioContext) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      this.audioContext = new AudioContext();
+    }
+
+    if (this.audioContext.state === 'suspended') {
+      this.audioContext.resume();
+    }
+
+    try {
+      const source = this.audioContext.createMediaStreamSource(stream);
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 128;
+      source.connect(this.analyser);
+      this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+    } catch (err) {
+      console.warn('Local Mic Visualizer setup notice:', err);
+    }
   }
 
   setupAudioVisualizer(audioEl) {
@@ -1953,7 +1983,6 @@ Would you like me to illustrate any related diagram or dive deeper into a specif
       this.analyser.connect(this.audioContext.destination);
 
       this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
-      this.renderVisualizer();
     } catch (err) {
       console.warn('Audio Visualizer setup error:', err);
     }
@@ -1961,10 +1990,8 @@ Would you like me to illustrate any related diagram or dive deeper into a specif
 
   renderVisualizer() {
     this.animationFrameId = requestAnimationFrame(() => this.renderVisualizer());
-    if (!this.analyser || !this.dataArray) return;
-
-    this.analyser.getByteFrequencyData(this.dataArray);
     const canvas = this.dom.visualizerCanvas;
+    if (!canvas) return;
     const ctx = this.canvasCtx;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -1973,31 +2000,55 @@ Would you like me to illustrate any related diagram or dive deeper into a specif
     const radius = 80;
     const bars = 48;
     const step = (Math.PI * 2) / bars;
+    const time = Date.now() * 0.003;
 
     let avgVolume = 0;
-    for (let i = 0; i < bars; i++) {
-      avgVolume += this.dataArray[i];
+    if (this.analyser && this.dataArray) {
+      this.analyser.getByteFrequencyData(this.dataArray);
+      for (let i = 0; i < bars; i++) {
+        avgVolume += this.dataArray[i] || 0;
+      }
+      avgVolume = avgVolume / bars;
     }
-    avgVolume = avgVolume / bars;
 
-    const scaleFactor = 1 + (avgVolume / 255) * 0.45;
-    this.dom.orbCore.style.transform = `scale(${scaleFactor})`;
+    // Dynamic scale factor responding to live voice volume and gentle breathing
+    const isSpeaking = avgVolume > 12;
+    const breathingFactor = Math.sin(time * 1.8) * 0.04;
+    const scaleFactor = 1 + (avgVolume / 255) * 0.5 + (this.isConnected ? breathingFactor : 0);
+    if (this.dom.orbCore) {
+      this.dom.orbCore.style.transform = `scale(${scaleFactor})`;
+      if (isSpeaking) {
+        this.dom.orbCore.classList.add('pulse');
+      } else if (!window.speechSynthesis?.speaking) {
+        this.dom.orbCore.classList.remove('pulse');
+      }
+    }
 
     for (let i = 0; i < bars; i++) {
-      const value = this.dataArray[i] || 0;
-      const barHeight = Math.max(4, (value / 255) * 75);
+      let value = (this.dataArray && this.dataArray[i]) ? this.dataArray[i] : 0;
+      
+      // Ambient undulating wave frequencies when idle
+      if (value < 8) {
+        value = this.isConnected 
+          ? (Math.sin(time * 2.2 + i * 0.38) * 0.5 + 0.5) * 32 + 6 
+          : (Math.sin(time + i * 0.25) * 0.5 + 0.5) * 14 + 4;
+      }
+
+      const barHeight = Math.max(4, (value / 255) * 85);
       const angle = i * step;
 
-      const x1 = centerX + Math.cos(angle) * (radius + 5);
-      const y1 = centerY + Math.sin(angle) * (radius + 5);
-      const x2 = centerX + Math.cos(angle) * (radius + 5 + barHeight);
-      const y2 = centerY + Math.sin(angle) * (radius + 5 + barHeight);
+      const x1 = centerX + Math.cos(angle) * (radius + 6);
+      const y1 = centerY + Math.sin(angle) * (radius + 6);
+      const x2 = centerX + Math.cos(angle) * (radius + 6 + barHeight);
+      const y2 = centerY + Math.sin(angle) * (radius + 6 + barHeight);
 
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
-      ctx.strokeStyle = `hsl(${220 + (i / bars) * 60}, 100%, 65%)`;
-      ctx.lineWidth = 3;
+      ctx.strokeStyle = isSpeaking 
+        ? `hsl(${180 + (i / bars) * 100}, 100%, 65%)`
+        : `hsla(${220 + (i / bars) * 60}, 90%, 65%, ${this.isConnected ? 0.85 : 0.4})`;
+      ctx.lineWidth = isSpeaking ? 3.5 : 2.5;
       ctx.lineCap = 'round';
       ctx.stroke();
     }
