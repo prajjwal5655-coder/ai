@@ -128,6 +128,7 @@ class OmniLearnApp {
     this.bindEvents();
     this.initCanvasVisualizer();
     this.initWhiteboard();
+    this.setupSpeechRecognition();
     await this.fetchServerStatus();
   }
 
@@ -301,6 +302,9 @@ class OmniLearnApp {
         console.warn('Local mic visualizer notice:', e);
       }
 
+      // 5. Start real-time speech recognition for instant spoken voice interaction
+      this.startSpeechRecognition();
+
       this.isConnected = true;
       this.setConnectionState('connected', 'Live Session');
       this.dom.connectBtnText.textContent = 'End Call';
@@ -320,6 +324,8 @@ class OmniLearnApp {
   }
 
   async disconnect() {
+    this.stopSpeechRecognition();
+
     if (this.room) {
       await this.room.disconnect();
       this.room = null;
@@ -346,6 +352,93 @@ class OmniLearnApp {
     this.dom.micToggleBtn.classList.toggle('active', this.isMicMuted);
     const icon = this.dom.micToggleBtn.querySelector('i');
     icon.className = this.isMicMuted ? 'fa-solid fa-microphone-slash' : 'fa-solid fa-microphone';
+
+    if (this.isMicMuted) {
+      this.stopSpeechRecognition();
+    } else {
+      this.startSpeechRecognition();
+    }
+  }
+
+  /* --------------------------------------------------------------------------
+     Web Speech Recognition (Browser Real-Time Voice Input)
+     -------------------------------------------------------------------------- */
+  setupSpeechRecognition() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn('Speech Recognition not supported in this browser.');
+      return;
+    }
+
+    try {
+      this.recognition = new SpeechRecognition();
+      this.recognition.continuous = true;
+      this.recognition.interimResults = true;
+      this.recognition.lang = 'en-US';
+
+      this.recognition.onstart = () => {
+        this.isSpeechRecognitionActive = true;
+        console.log('🎤 Web Speech Recognition active and listening');
+      };
+
+      this.recognition.onresult = (event) => {
+        let interimText = '';
+        let finalText = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const trans = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalText += trans;
+          } else {
+            interimText += trans;
+          }
+        }
+
+        if (interimText.trim()) {
+          this.setSubtitles('You (Speaking...)', interimText);
+          this.dom.agentStateText.textContent = 'Hearing your voice...';
+        }
+
+        if (finalText.trim()) {
+          console.log('🗣️ Heard spoken voice query:', finalText);
+          this.sendTextMessage(finalText);
+        }
+      };
+
+      this.recognition.onerror = (event) => {
+        if (event.error !== 'no-speech') {
+          console.warn('Speech recognition event:', event.error);
+        }
+      };
+
+      this.recognition.onend = () => {
+        this.isSpeechRecognitionActive = false;
+        // Keep listening while connected and not muted
+        if (this.isConnected && !this.isMicMuted) {
+          try {
+            this.recognition.start();
+          } catch (e) {}
+        }
+      };
+    } catch (err) {
+      console.warn('Speech recognition setup error:', err);
+    }
+  }
+
+  startSpeechRecognition() {
+    if (this.recognition && !this.isSpeechRecognitionActive) {
+      try {
+        this.recognition.start();
+      } catch (e) {}
+    }
+  }
+
+  stopSpeechRecognition() {
+    if (this.recognition && this.isSpeechRecognitionActive) {
+      try {
+        this.recognition.stop();
+      } catch (e) {}
+    }
   }
 
   setConnectionState(state, text) {
@@ -748,8 +841,19 @@ Would you like me to illustrate any related diagram or dive deeper into a specif
   }
 
   setSubtitles(speaker, text) {
+    if (!this.dom.subtitleSpeaker || !this.dom.subtitleContent) return;
     this.dom.subtitleSpeaker.innerHTML = `<i class="fa-solid fa-sparkles"></i> <span>${speaker}</span>`;
-    this.dom.subtitleContent.textContent = `"${text}"`;
+
+    // Clean raw LaTeX, python markdown blocks, and asterisk/bullet noise for clean subtitle display
+    const cleanText = text
+      .replace(/```[\s\S]*?```/g, ' [Python Code loaded in VS Code Studio] ')
+      .replace(/[\$\*#`_]/g, '')
+      .replace(/\\(?:cdot|times|frac|text|theta|approx|mu|omega)/g, '')
+      .replace(/\{|\}/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    this.dom.subtitleContent.textContent = `"${cleanText.slice(0, 190)}${cleanText.length > 190 ? '...' : ''}"`;
   }
 
   /* --------------------------------------------------------------------------
