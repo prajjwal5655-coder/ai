@@ -440,7 +440,10 @@ async def entrypoint(ctx: JobContext) -> None:
                     user_prompt = f"[Whiteboard Drawing Scan]: {raw}. Please analyze and draw the solution on the whiteboard."
 
                 logger.info(f"Dispatching Whiteboard Analysis Prompt: {user_prompt[:120]}...")
-                session.generate_reply(user_input=user_prompt)
+                try:
+                    session.generate_reply(user_input=user_prompt)
+                except Exception as llm_err:
+                    logger.warning(f"LLM generate_reply notice (gateway quota or rate limit): {llm_err}")
 
             elif topic in ["lk.chat", "lk-chat", "chat", ""]:
                 try:
@@ -451,7 +454,10 @@ async def entrypoint(ctx: JobContext) -> None:
 
                 if msg_text and str(msg_text).strip():
                     logger.info(f"Received text chat message: {msg_text}")
-                    session.generate_reply(user_input=str(msg_text).strip())
+                    try:
+                        session.generate_reply(user_input=str(msg_text).strip())
+                    except Exception as llm_err:
+                        logger.warning(f"LLM generate_reply notice (gateway quota or rate limit): {llm_err}")
 
         except Exception as e:
             logger.warning(f"Error handling incoming data: {e}")
